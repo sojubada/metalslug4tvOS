@@ -1,0 +1,191 @@
+{
+  "Map/BG_Far": {
+    "atlas": "assets/Map/BG_Far.png",
+    "frames": 1,
+    "cell_w": 472,
+    "cell_h": 128,
+    "source": "bg_far.png"
+  },
+  "Map/BG_Mid": {
+    "atlas": "assets/Map/BG_Mid.png",
+    "frames": 6,
+    "cell_w": 64,
+    "cell_h": 128,
+    "source": "bg_mid_props.png"
+  },
+  "Character/Boss/Boss_Tank": {
+    "atlas": "assets/Character/Boss/Boss_Tank.png",
+    "frames": 1,
+    "cell_w": 252,
+    "cell_h": 128,
+    "source": "boss.png"
+  },
+  "Character/Boss/Boss_Cannon": {
+    "atlas": "assets/Character/Boss/Boss_Cannon.png",
+    "frames": 1,
+    "cell_w": 296,
+    "cell_h": 128,
+    "source": "boss_cannon.png"
+  },
+  "WeaponSFX/Bullets": {
+    "atlas": "assets/WeaponSFX/Bullets.png",
+    "frames": 4,
+    "cell_w": 130,
+    "cell_h": 128,
+    "source": "bullets.png"
+  },
+  "Map/Bunker": {
+    "atlas": "assets/Map/Bunker.png",
+    "frames": 1,
+    "cell_w": 275,
+    "cell_h": 128,
+    "source": "bunker.png"
+  },
+  "UI/Font_Numbers": {
+    "atlas": "assets/UI/Font_Numbers.png",
+    "frames": 10,
+    "cell_w": 84,
+    "cell_h": 128,
+    "source": "digits.png"
+  },
+  "Character/Enemy/Soldier/Soldier_Attack": {
+    "atlas": "assets/Character/Enemy/Soldier/Soldier_Attack.png",
+    "frames": 3,
+    "cell_w": 103,
+    "cell_h": 128,
+    "source": "enemy_soldier_attack.png"
+  },
+  "Character/Enemy/Soldier/Soldier_Death": {
+    "atlas": "assets/Character/Enemy/Soldier/Soldier_Death.png",
+    "frames": 4,
+    "cell_w": 97,
+    "cell_h": 128,
+    "source": "enemy_soldier_death.png"
+  },
+  "Character/Enemy/Soldier/Soldier_Run": {
+    "atlas": "assets/Character/Enemy/Soldier/Soldier_Run.png",
+    "frames": 4,
+    "cell_w": 88,
+    "cell_h": 128,
+    "source": "enemy_soldier_run.png"
+  },
+  "WeaponSFX/Explosion": {
+    "atlas": "assets/WeaponSFX/Explosion.png",
+    "frames": 6,
+    "cell_w": 56,
+    "cell_h": 128,
+    "source": "explosion.png"
+  },
+  "Character/Enemy/Soldier/Grenadier": {
+    "atlas": "assets/Character/Enemy/Soldier/Grenadier.png",
+    "frames": 3,
+    "cell_w": 126,
+    "cell_h": 128,
+    "source": "grenadier.png"
+  },
+  "Map/Ground_Tile": {
+    "atlas": "assets/Map/Ground_Tile.png",
+    "frames": 1,
+    "cell_w": 627,
+    "cell_h": 128,
+    "source": "ground_tile.png"
+  },
+  "Character/Enemy/Vehicle/Heli": {
+    "atlas": "assets/Character/Enemy/Vehicle/Heli.png",
+    "frames": 2,
+    "cell_w": 257,
+    "cell_h": 128,
+    "source": "heli.png"
+  },
+  "Item/Hostage": {
+    "atlas": "assets/Item/Hostage.png",
+    "frames": 3,
+    "cell_w": 97,
+    "cell_h": 128,
+    "source": "hostage.png"
+  },
+  "UI/HUD_Icons": {
+    "atlas": "assets/UI/HUD_Icons.png",
+    "frames": 5,
+    "cell_w": 137,
+    "cell_h": 128,
+    "source": "hud_icons.png"
+  },
+  "WeaponSFX/Impact": {
+    "atlas": "assets/WeaponSFX/Impact.png",
+    "frames": 4,
+    "cell_w": 107,
+    "cell_h": 128,
+    "source": "impact.png"
+  },
+  "Item/Items": {
+    "atlas": "assets/Item/Items.png",
+    "frames": 8,
+    "cell_w": 116,
+    "cell_h": 128,
+    "source": "items.png"
+  },
+  "WeaponSFX/Muzzle": {
+    "atlas": "assets/WeaponSFX/Muzzle.png",
+    "frames": 3,
+    "cell_w": 103,
+    "cell_h": 128,
+    "source": "muzzle.png"
+  },
+  "Character/Enemy/Soldier/Paratrooper": {
+    "atlas": "assets/Character/Enemy/Soldier/Paratrooper.png",
+    "frames": 2,
+    "cell_w": 77,
+    "cell_h": 128,
+    "source": "paratrooper.png"
+  },
+  "Character/Player/Fire": {
+    "atlas": "assets/Character/Player/Fire.png",
+    "frames": 4,
+    "cell_w": 78,
+    "cell_h": 128,
+    "source": "player_fire.png"
+  },
+  "Character/Player/Hit": {
+    "atlas": "assets/Character/Player/Hit.png",
+    "frames": 4,
+    "cell_w": 90,
+    "cell_h": 128,
+    "source": "player_hit.png"
+  },
+  "Character/Player/Jump": {
+    "atlas": "assets/Character/Player/Jump.png",
+    "frames": 3,
+    "cell_w": 96,
+    "cell_h": 128,
+    "source": "player_jump.png"
+  },
+  "Character/Player/Run": {
+    "atlas": "assets/Character/Player/Run.png",
+    "frames": 6,
+    "cell_w": 83,
+    "cell_h": 128,
+    "source": "player_run.png"
+  },
+  "Vehicle/Player/Slug": {
+    "atlas": "assets/Vehicle/Player/Slug.png",
+    "frames": 1,
+    "cell_w": 182,
+    "cell_h": 128,
+    "source": "slug.png"
+  },
+  "WeaponSFX/Smoke": {
+    "atlas": "assets/WeaponSFX/Smoke.png",
+    "frames": 5,
+    "cell_w": 103,
+    "cell_h": 128,
+    "source": "smoke.png"
+  },
+  "Character/Enemy/Vehicle/Tank": {
+    "atlas": "assets/Character/Enemy/Vehicle/Tank.png",
+    "frames": 1,
+    "cell_w": 232,
+    "cell_h": 128,
+    "source": "tank.png"
+  }
+}

@@ -57,8 +57,19 @@ ROUTES = [
     (r"bunker",                         "Map",                       "Bunker"),
 ]
 
-# 프레임을 잘라서는 안 되는 것들 (배경 타일·단일 이미지)
-NO_SPLIT = {"Ground_Tile", "BG_Far", "Boss_Tank", "Boss_Damaged", "Bunker", "Idle"}
+# 각 시트에 들어 있는 프레임 수. 프롬프트에서 "균등 간격"을 요구했으므로
+# 알파 간격 탐지보다 균등 분할이 훨씬 안정적이다. 1 = 단일 스프라이트.
+FRAMES = {
+    "Idle": 1, "Run": 6, "Jump": 3, "Fire": 4, "Hit": 4,
+    "Soldier_Run": 4, "Soldier_Attack": 3, "Soldier_Death": 4,
+    "Grenadier": 3, "Paratrooper": 2,
+    "Tank": 1, "Tank_Tread": 2, "Heli": 2, "Slug": 1,
+    "Boss_Tank": 1, "Boss_Damaged": 1, "Boss_Cannon": 1,
+    "Explosion": 6, "Muzzle": 3, "Bullets": 4, "Smoke": 5, "Impact": 4,
+    "Items": 8, "Hostage": 3,
+    "Ground_Tile": 1, "BG_Far": 1, "BG_Mid": 6, "Bunker": 1,
+    "Font_Numbers": 10, "Font_Letters": 26, "HUD_Frame": 1, "HUD_Icons": 5,
+}
 
 
 def route(filename):
@@ -69,60 +80,146 @@ def route(filename):
     return "_unsorted", os.path.splitext(filename)[0]
 
 
-def to_transparent(img):
-    """밝은 배경과 체크무늬 배경을 투명으로."""
+def to_transparent(img, tol=20):
+    """배경을 투명으로. 테두리에서 흘려보내며(flood fill) 지우므로
+    흰 배경, 단색 배경, 생성 모델이 투명을 뜻해 그려 넣는 체크무늬를 모두 처리한다.
+    안쪽의 흰 하이라이트는 테두리와 이어져 있지 않으므로 살아남는다."""
     img = img.convert("RGBA")
     w, h = img.size
     px = img.load()
-    # 네 모서리 색을 배경 후보로 본다
-    corners = [px[0, 0], px[w - 1, 0], px[0, h - 1], px[w - 1, h - 1]]
-    for y in range(h):
-        for x in range(w):
-            r, g, b, a = px[x, y]
-            if a == 0:
+
+    # 테두리에 많이 보이는 색을 배경색 후보로 모은다 (체크무늬는 두 가지)
+    counts = {}
+    border = [(x, y) for x in range(w) for y in (0, h - 1)]
+    border += [(x, y) for y in range(h) for x in (0, w - 1)]
+    for x, y in border:
+        r, g, b, a = px[x, y]
+        if a == 0:
+            continue
+        k = (r // 12, g // 12, b // 12)
+        counts[k] = counts.get(k, 0) + 1
+    if not counts:
+        return img
+    total = sum(counts.values())
+    bg = [k for k, n in counts.items() if n >= total * 0.10][:4]
+    if not bg:
+        return img
+    bg = [(k[0] * 12 + 6, k[1] * 12 + 6, k[2] * 12 + 6) for k in bg]
+
+    def is_bg(c):
+        return any(abs(c[0] - b[0]) <= tol and abs(c[1] - b[1]) <= tol
+                   and abs(c[2] - b[2]) <= tol for b in bg)
+
+    seen = bytearray(w * h)
+    stack = [p for p in border]
+    while stack:
+        x, y = stack.pop()
+        if x < 0 or y < 0 or x >= w or y >= h or seen[y * w + x]:
+            continue
+        seen[y * w + x] = 1
+        r, g, b, a = px[x, y]
+        if a != 0 and not is_bg((r, g, b)):
+            continue
+        px[x, y] = (0, 0, 0, 0)
+        stack.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
+
+    # 2차 제거 — 테두리에서 닿지 않는 안쪽 체크무늬 조각(다리 사이, 칸 안쪽 등)을
+    # 지운다. 배경색과 같으면서 덩어리가 큰 것만 지우므로 헬멧 하이라이트 같은
+    # 작은 흰 점은 살아남는다.
+    seen2 = bytearray(w * h)
+    for sy in range(h):
+        for sx in range(w):
+            if seen2[sy * w + sx]:
                 continue
-            if r > 236 and g > 236 and b > 236:          # 흰 배경
-                px[x, y] = (0, 0, 0, 0)
+            r, g, b, a = px[sx, sy]
+            if a == 0 or not is_bg((r, g, b)):
+                seen2[sy * w + sx] = 1
                 continue
-            for cr, cg, cb, ca in corners:               # 체크무늬 등 단색 배경
-                if ca and abs(r - cr) < 10 and abs(g - cg) < 10 and abs(b - cb) < 10:
+            blob, stack = [], [(sx, sy)]
+            seen2[sy * w + sx] = 1
+            while stack:
+                x, y = stack.pop()
+                blob.append((x, y))
+                for nx, ny in ((x+1, y), (x-1, y), (x, y+1), (x, y-1)):
+                    if 0 <= nx < w and 0 <= ny < h and not seen2[ny * w + nx]:
+                        rr, gg, bb, aa = px[nx, ny]
+                        if aa != 0 and is_bg((rr, gg, bb)):
+                            seen2[ny * w + nx] = 1
+                            stack.append((nx, ny))
+            if len(blob) >= 200:
+                for x, y in blob:
                     px[x, y] = (0, 0, 0, 0)
-                    break
-    # 반투명 가장자리 제거 — 도트는 알파가 0 아니면 255여야 깔끔하다
+
     alpha = img.getchannel("A").point(lambda v: 255 if v > 110 else 0)
     img.putalpha(alpha)
     return img
 
 
-def split_frames(img, min_gap=4):
-    """완전히 빈 세로줄을 경계로 프레임을 나눈다. 행이 여러 줄이면 먼저 가로로 나눈다."""
-    def slices(mask, length, getter):
-        runs, start = [], None
-        for i in range(length):
-            filled = getter(i)
-            if filled and start is None:
-                start = i
-            elif not filled and start is not None:
-                runs.append((start, i))
-                start = None
-        if start is not None:
-            runs.append((start, length))
-        return [r for r in runs if r[1] - r[0] >= min_gap]
-
-    a = img.getchannel("A")
+def strip_guides(img, max_thickness=16, fill_ratio=0.82):
+    """생성 모델이 베이스라인 표시로 그려 넣는 가로 전체 선을 지운다.
+    이 선을 남겨두면 프레임이 서로 이어져 분할이 되지 않는다."""
     w, h = img.size
-    cols = a.load()
-    row_runs = slices(None, h, lambda y: any(cols[x, y] for x in range(w)))
+    a = img.getchannel("A").load()
+    filled = [sum(1 for x in range(w) if a[x, y]) / w for y in range(h)]
+    px = img.load()
+    y = 0
+    while y < h:
+        if filled[y] >= fill_ratio:
+            y2 = y
+            while y2 < h and filled[y2] >= fill_ratio:
+                y2 += 1
+            if y2 - y <= max_thickness:
+                for yy in range(y, y2):
+                    for x in range(w):
+                        px[x, yy] = (0, 0, 0, 0)
+            y = y2
+        else:
+            y += 1
+    return img
+
+
+def despeckle(img, min_ratio=0.0008):
+    """배경을 걷어낸 뒤 남는 자잘한 찌꺼기를 지운다.
+    이걸 안 하면 찌꺼기가 프레임으로 잡혀 분할이 엉망이 된다."""
+    w, h = img.size
+    a = img.getchannel("A").load()
+    seen = bytearray(w * h)
+    px = img.load()
+    min_px = max(12, int(w * h * min_ratio))
+    for sy in range(h):
+        for sx in range(w):
+            if seen[sy * w + sx] or not a[sx, sy]:
+                continue
+            blob, stack = [], [(sx, sy)]
+            seen[sy * w + sx] = 1
+            while stack:
+                x, y = stack.pop()
+                blob.append((x, y))
+                for nx, ny in ((x+1, y), (x-1, y), (x, y+1), (x, y-1)):
+                    if 0 <= nx < w and 0 <= ny < h and not seen[ny * w + nx] and a[nx, ny]:
+                        seen[ny * w + nx] = 1
+                        stack.append((nx, ny))
+            if len(blob) < min_px:
+                for x, y in blob:
+                    px[x, y] = (0, 0, 0, 0)
+    return img
+
+
+def split_frames(img, count):
+    """내용 영역을 가로로 count등분한다. 각 칸은 다시 내용만큼 잘라낸다."""
+    box = img.getbbox()
+    if not box:
+        return []
+    img = img.crop(box)
+    if count <= 1:
+        return [img]
+    w, h = img.size
+    step = w / count
     frames = []
-    for y0, y1 in row_runs:
-        band = img.crop((0, y0, w, y1))
-        ba = band.getchannel("A").load()
-        bw, bh = band.size
-        col_runs = slices(None, bw, lambda x: any(ba[x, y] for y in range(bh)))
-        for x0, x1 in col_runs:
-            f = band.crop((x0, 0, x1, bh))
-            if f.getbbox():
-                frames.append(f.crop(f.getbbox()))
+    for i in range(count):
+        cell = img.crop((round(i * step), 0, round((i + 1) * step), h))
+        b = cell.getbbox()
+        frames.append(cell.crop(b) if b else cell)
     return frames
 
 
@@ -143,8 +240,10 @@ def normalize(frames, cell_h, baseline_pad=0):
 
 
 def grade(img, sat, colors):
+    """채도만 가볍게 올리고 색 수를 줄인다. 밝기는 생성 단계에서 잡는다 —
+    여기서 밝기를 끌어올리면 검은 외곽선이 들뜨고 색이 분필처럼 바랜다."""
     rgb = ImageEnhance.Color(img.convert("RGB")).enhance(sat)
-    rgb = ImageEnhance.Contrast(rgb).enhance(1.15)
+    rgb = ImageEnhance.Contrast(rgb).enhance(1.08)
     q = rgb.quantize(colors=colors, dither=Image.NONE).convert("RGBA")
     q.putalpha(img.getchannel("A"))
     return q
@@ -154,7 +253,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("indir")
     ap.add_argument("--out", default="image")
-    ap.add_argument("--tone", type=float, default=1.55, help="채도 배율 (1.0 = 원본)")
+    ap.add_argument("--tone", type=float, default=1.20, help="채도 배율 (1.0 = 원본)")
     ap.add_argument("--height", type=int, default=128, help="캐릭터 프레임 높이(px)")
     ap.add_argument("--colors", type=int, default=24)
     args = ap.parse_args()
@@ -168,15 +267,16 @@ def main():
     manifest = {}
     for fn in files:
         folder, name = route(fn)
-        src = to_transparent(Image.open(os.path.join(args.indir, fn)))
+        src = strip_guides(to_transparent(Image.open(os.path.join(args.indir, fn))))
         if not src.getbbox():
             print(f"  ! {fn}: 내용이 비어 있다 (배경 제거가 과했을 수 있음)")
             continue
 
-        if name in NO_SPLIT:
-            frames = [src.crop(src.getbbox())]
-        else:
-            frames = split_frames(src) or [src.crop(src.getbbox())]
+        src = despeckle(src)
+        if not src.getbbox():
+            print(f"  ! {fn}: 정리 후 내용이 남지 않았다")
+            continue
+        frames = split_frames(src, FRAMES.get(name, 1))
 
         cell_h = args.height if folder.startswith(("Character", "Vehicle")) else \
             min(args.height, max(f.height for f in frames))
