@@ -1,0 +1,95 @@
+name: Build unsigned IPA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      make_release:
+        description: "Publish a GitHub release with the IPA"
+        type: boolean
+        default: true
+      release_note:
+        description: "One line describing what this build is for"
+        type: string
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          for candidate in /Applications/Xcode_16.4.app /Applications/Xcode_16.3.app /Applications/Xcode_16.2.app /Applications/Xcode_16.1.app /Applications/Xcode_16.app; do
+            if [ -d "$candidate" ]; then
+              sudo xcode-select -s "$candidate"
+              break
+            fi
+          done
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i appletv || true
+
+      - name: Install tools
+        run: |
+          brew install xcodegen || true
+          brew install ldid || brew install ldid-procursus
+          xcodegen --version
+          ldid -v || true
+
+      - name: Generate Xcode project
+        working-directory: platforms/tvos
+        run: xcodegen generate --spec project.yml
+
+      - name: Build (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project platforms/tvos/MetalSlugOriginal.xcodeproj \
+            -scheme MetalSlugOriginal \
+            -configuration Release \
+            -destination 'generic/platform=tvOS' \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ENABLE_BITCODE=NO \
+            ONLY_ACTIVE_ARCH=NO \
+            build
+
+      - name: Package IPA
+        run: |
+          set -e
+          bash tools/package_ipa.sh "MetalSlugOriginal.ipa" "Metal Slug" "${{ github.run_number }}"
+          echo "BUILD_TAG=build-$(date -u +%Y%m%d%H%M%S)" >> "$GITHUB_ENV"
+          echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          ls -lh MetalSlugOriginal.ipa
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MetalSlugOriginal-ipa
+          path: MetalSlugOriginal.ipa
+
+      - name: Publish release
+        if: github.event_name == 'workflow_dispatch' && inputs.make_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.BUILD_TAG }}
+          name: MetalSlug tvOS ${{ env.IPA_VERSION }} build ${{ github.run_number }} (${{ env.SHORT_SHA }})
+          body: |
+            ${{ inputs.release_note }}
+
+            Unsigned, fakesigned build. Apple TV (tvOS 16.6 / A15) 에 TrollStore 로 설치하세요.
+
+            - Bundle ID: com.tvos166.metalslug.original
+            - Build: ${{ github.run_number }}
+            - Commit: ${{ github.sha }}
+          files: |
+            MetalSlugOriginal.ipa
