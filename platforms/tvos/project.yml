@@ -1,0 +1,30 @@
+name: MetalSlugOriginal
+options:
+  bundleIdPrefix: com.tvos166
+  deploymentTarget:
+    tvOS: "16.6"
+targets:
+  MetalSlugOriginal:
+    type: application
+    platform: tvOS
+    deploymentTarget: "16.6"
+    sources:
+      - path: .
+        excludes:
+          - project.yml
+          - Info.plist
+      - path: ../../core/src
+    settings:
+      base:
+        INFOPLIST_FILE: Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.tvos166.metalslug.original
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/../../core/include"
+        CLANG_ENABLE_MODULES: YES
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        ENABLE_BITCODE: NO
+    dependencies:
+      - sdk: UIKit.framework
+      - sdk: GameController.framework
+      - sdk: QuartzCore.framework
