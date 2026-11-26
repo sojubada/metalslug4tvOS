@@ -1,0 +1,281 @@
+name: Build tvOS (.tipa)
+
+# MeloNX for tvOS (tvOS 16, TrollStore).
+#
+#   deps  ─┐   MoltenVK 1.4.0 / SDL3 (e4f75ba) / FFmpeg for appletvos   (cached)
+#   core  ─┼─▶ app   Ryujinx.Library NativeAOT tvos-arm64                 (cached)
+#          ┘         XcodeGen + xcodebuild + ldid → MeloNX.tipa
+#
+# Pushing a tvos-v* tag publishes a release with MeloNX.tipa / MeloNX.ipa.
+
+on:
+  workflow_dispatch:
+    inputs:
+      rebuild_deps:
+        description: "Ignore the native dependency cache"
+        type: boolean
+        default: false
+      release_tag:
+        description: "Publish a release with this tag (e.g. tvos-v2.7.0). Empty = build only"
+        type: string
+        default: ""
+  push:
+    branches: [tvos-2.7]
+    tags: ["tvos-v*"]
+    paths-ignore: ["**.md"]
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tvos-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DEPS_CACHE_VERSION: "3"
+  RUNNER_XCODE: "26"     # MeloNX 2.7 uses Xcode 26 Swift settings (default MainActor isolation)
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  deps:
+    name: Native dependencies (appletvos)
+    runs-on: macos-26
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          ls -d /Applications/Xcode*.app
+          XC="$(ls -d /Applications/Xcode_${RUNNER_XCODE}*.app 2>/dev/null | sort -V | tail -1)"
+          [ -n "$XC" ] && sudo xcode-select -s "$XC/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk appletvos --show-sdk-path || xcodebuild -downloadPlatform tvOS
+          xcrun --sdk appletvos --show-sdk-version
+
+      - name: Restore cache
+        id: cache
+        if: ${{ inputs.rebuild_deps != true }}
+        uses: actions/cache/restore@v4
+        with:
+          path: tvos/deps/out
+          key: tvos-deps-v${{ env.DEPS_CACHE_VERSION }}-${{ hashFiles('tvos/scripts/build-deps.sh') }}
+
+      - name: Tools
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: brew install cmake pkg-config nasm || true
+
+      - name: MoltenVK
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          if ! ./tvos/scripts/build-deps.sh moltenvk; then
+            echo "::warning::MoltenVK v1.4.0 failed with this Xcode; falling back to v1.3.0"
+            rm -rf tvos/deps/src/MoltenVK
+            MOLTENVK_TAG=v1.3.0 ./tvos/scripts/build-deps.sh moltenvk
+          fi
+
+      - name: SDL3
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: ./tvos/scripts/build-deps.sh sdl3
+
+      # Nvdec video decoding only (in-game movies). The emulator runs without it.
+      - name: FFmpeg (optional)
+        if: steps.cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        run: ./tvos/scripts/build-deps.sh ffmpeg
+
+      - name: Save cache
+        if: steps.cache.outputs.cache-hit != 'true' && hashFiles('tvos/deps/out/tvos/libMoltenVK.dylib') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: tvos/deps/out
+          key: tvos-deps-v${{ env.DEPS_CACHE_VERSION }}-${{ hashFiles('tvos/scripts/build-deps.sh') }}
+
+      - name: Check outputs
+        run: |
+          set -e
+          ls -la tvos/deps/out/tvos
+          for f in SDL3.xcframework libMoltenVK.dylib; do
+            [ -e "tvos/deps/out/tvos/$f" ] || { echo "::error::missing $f"; exit 1; }
+          done
+          for f in tvos/deps/out/tvos/*.dylib tvos/deps/out/tvos/SDL3.xcframework/*/SDL3.framework/SDL3; do
+            printf '%s: ' "${f#tvos/deps/out/tvos/}"; vtool -show-build "$f" | grep -E -m2 "platform|minos" | tr '\n' ' '; echo
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tvos-deps
+          path: tvos/deps/out/tvos
+          retention-days: 7
+
+  core:
+    name: Ryujinx core (NativeAOT tvos-arm64)
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          XC="$(ls -d /Applications/Xcode_${RUNNER_XCODE}*.app 2>/dev/null | sort -V | tail -1)"
+          [ -n "$XC" ] && sudo xcode-select -s "$XC/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk appletvos --show-sdk-path || xcodebuild -downloadPlatform tvOS
+
+      - name: Restore cache
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: src/Ryujinx.Library/bin/Release/net10.0/tvos-arm64/native
+          key: tvos-core-${{ hashFiles('src/**/*.cs', 'src/**/*.csproj', 'src/**/*.xml', 'Directory.*.props', 'nuget.config', 'global.json') }}
+
+      - uses: actions/setup-dotnet@v4
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          global-json-file: global.json
+
+      - name: dotnet publish -r tvos-arm64
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -o pipefail
+          dotnet publish src/Ryujinx.Library -c Release -r tvos-arm64 --self-contained true \
+            -p:ExtraDefineConstants=DISABLE_UPDATER 2>&1 | tee dotnet-publish.log
+
+      - name: Check dylib
+        run: |
+          set -e
+          D=src/Ryujinx.Library/bin/Release/net10.0/tvos-arm64/native/Ryujinx.Library.dylib
+          ls -la "$(dirname "$D")"
+          vtool -show-build "$D" | grep -E "platform|minos|sdk"
+          vtool -show-build "$D" | grep -q "platform TVOS" || { echo "::error::core is not a tvOS binary"; exit 1; }
+          otool -D "$D"
+          for s in main_ryujinx_sdl initialize set_native_window attach_gamepad install_firmware; do
+            nm -gU "$D" | grep -q " _$s$" || { echo "::error::export _$s missing"; exit 1; }
+          done
+
+      - name: Save cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: src/Ryujinx.Library/bin/Release/net10.0/tvos-arm64/native
+          key: tvos-core-${{ hashFiles('src/**/*.cs', 'src/**/*.csproj', 'src/**/*.xml', 'Directory.*.props', 'nuget.config', 'global.json') }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tvos-core
+          path: src/Ryujinx.Library/bin/Release/net10.0/tvos-arm64/native/Ryujinx.Library.dylib
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: core-log
+          path: dotnet-publish.log
+          if-no-files-found: ignore
+
+  app:
+    name: App + .tipa
+    needs: [deps, core]
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          XC="$(ls -d /Applications/Xcode_${RUNNER_XCODE}*.app 2>/dev/null | sort -V | tail -1)"
+          [ -n "$XC" ] && sudo xcode-select -s "$XC/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk appletvos --show-sdk-path || xcodebuild -downloadPlatform tvOS
+
+      - name: Tools
+        run: brew install xcodegen ldid
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tvos-deps
+          path: tvos/deps/out/tvos
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tvos-core
+          path: src/Ryujinx.Library/bin/Release/net10.0/tvos-arm64/native
+
+      - name: Generate project
+        run: |
+          ./tvos/scripts/prune-optional-deps.sh
+          xcodegen generate --spec project-tvos.yml
+
+      - name: xcodebuild
+        run: |
+          set +e
+          xcodebuild -project MeloNX-tvOS.xcodeproj -scheme MeloNX-tvOS \
+            -configuration Release -sdk appletvos -destination 'generic/platform=tvOS' \
+            -derivedDataPath build \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build > xcodebuild.log 2>&1
+          rc=$?
+          grep -E "error:" xcodebuild.log | sort -u | head -150
+          tail -3 xcodebuild.log
+          exit $rc
+
+      - name: Error summary
+        if: failure()
+        run: |
+          {
+            echo "## Compile errors"
+            echo '```'
+            grep -E "error:" xcodebuild.log | sed 's#.*/src/MeloNX/##; s#.*/tvos/#tvos/#' | sort -u | head -100
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package
+        run: |
+          APP="$(find build/Build/Products/Release-appletvos -maxdepth 1 -name '*.app' | head -1)"
+          ./tvos/scripts/package-tipa.sh "$APP" "$GITHUB_WORKSPACE/dist"
+          echo "### Bundle" >> "$GITHUB_STEP_SUMMARY"
+          ( cd "$GITHUB_WORKSPACE/dist" && ls -la ) >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-logs
+          path: xcodebuild.log
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MeloNX-tvOS
+          path: dist/*
+          retention-days: 30
+
+      # Three ways to publish, all started by the repository owner:
+      #   • Actions → Build tvOS (.tipa) → Run workflow, release_tag = tvos-vX.Y.Z
+      #   • push a tvos-v* tag
+      #   • Releases → Draft a new release (tag tvos-v…) → Publish
+      # A release that already exists just gets the files attached.
+      - name: Release
+        if: inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/tvos-v') || github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.release_tag }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -e
+          TAG="${INPUT_TAG:-${EVENT_TAG:-${GITHUB_REF#refs/tags/}}}"
+          # A tag cannot contain spaces ("tvOS-v2.7.0 b16" -> HTTP 422): use '-'
+          TAG="$(printf '%s' "$TAG" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s/[[:space:]]+/-/g')"
+          git check-ref-format "refs/tags/$TAG" || { echo "::error::invalid release tag '$TAG'"; exit 1; }
+          echo "tag: $TAG"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            [ -n "$(gh release view "$TAG" --json body -q .body)" ] || gh release edit "$TAG" --notes-file tvos/RELEASE_NOTES.md
+            gh release upload "$TAG" dist/MeloNX.tipa dist/MeloNX.ipa --clobber
+          else
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "MeloNX for tvOS $TAG" \
+              --notes-file tvos/RELEASE_NOTES.md dist/MeloNX.tipa dist/MeloNX.ipa
+          fi
+          echo "Release: $(gh release view "$TAG" --json url -q .url)" >> "$GITHUB_STEP_SUMMARY"
