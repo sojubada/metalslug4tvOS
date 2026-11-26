@@ -12,6 +12,7 @@ extern "C" {
 #define MS_MAX_BULLETS      64
 #define MS_MAX_ENEMIES      32
 #define MS_MAX_PARTICLES    96
+#define MS_MAX_EFFECTS      24
 #define MS_WORLD_WIDTH      4800.0f
 #define MS_GROUND_Y         540.0f
 #define MS_BASE_VIEW_WIDTH  1920.0f
@@ -49,6 +50,46 @@ typedef enum {
     MS_INPUT_PAUSE       = 1 << 7
 } ms_input_mask_t;
 
+/* 애니메이션 상태 — 렌더러가 어떤 스프라이트 시트를 쓸지 고른다 */
+typedef enum {
+    MS_ANIM_IDLE = 0,
+    MS_ANIM_RUN,
+    MS_ANIM_JUMP,
+    MS_ANIM_FALL,
+    MS_ANIM_FIRE,
+    MS_ANIM_FIRE_UP,
+    MS_ANIM_HIT,
+    MS_ANIM_DEAD
+} ms_anim_state_t;
+
+/* 한 틱 동안 일어난 소리 이벤트. 렌더러가 읽고 지운다. */
+typedef enum {
+    MS_SFX_SHOOT     = 1 << 0,
+    MS_SFX_GRENADE   = 1 << 1,
+    MS_SFX_EXPLOSION = 1 << 2,
+    MS_SFX_JUMP      = 1 << 3,
+    MS_SFX_HIT       = 1 << 4,
+    MS_SFX_PICKUP    = 1 << 5,
+    MS_SFX_SLUG      = 1 << 6,
+    MS_SFX_GAMEOVER  = 1 << 7
+} ms_sfx_bit_t;
+
+typedef enum {
+    MS_FX_EXPLOSION = 0,
+    MS_FX_IMPACT,
+    MS_FX_SMOKE,
+    MS_FX_MUZZLE
+} ms_effect_kind_t;
+
+typedef struct {
+    bool  active;
+    int   kind;
+    float x, y;
+    float scale;
+    int   frame;
+    int   timer;
+} ms_effect_t;
+
 typedef struct {
     float x, y;
     float vx, vy;
@@ -61,6 +102,10 @@ typedef struct {
     int   fire_cooldown;
     int   grenade_count;
     int   invuln_frames;
+    int   anim_state;      /* ms_anim_state_t */
+    int   anim_timer;      /* 현재 상태로 들어온 뒤 지난 프레임 수 */
+    int   muzzle_timer;    /* 총구 화염을 그릴 남은 프레임 */
+    bool  fired_up;        /* 마지막 사격이 상단 사격이었나 */
 } ms_player_t;
 
 typedef struct {
@@ -83,6 +128,10 @@ typedef struct {
     int   max_hp;
     int   ai_timer;
     int   score_value;
+    int   anim_timer;
+    int   facing;          /* -1 좌, 1 우 */
+    int   hit_flash;       /* 피격 섬광 남은 프레임 */
+    int   death_timer;     /* 0보다 크면 사망 연출 중 */
 } ms_enemy_t;
 
 typedef struct {
@@ -111,6 +160,8 @@ typedef struct {
     ms_bullet_t   bullets[MS_MAX_BULLETS];
     ms_enemy_t    enemies[MS_MAX_ENEMIES];
     ms_particle_t particles[MS_MAX_PARTICLES];
+    ms_effect_t   effects[MS_MAX_EFFECTS];
+    uint32_t      sfx_events;   /* ms_sfx_bit_t 의 OR */
     char          last_diag_note[MS_DIAG_LEN];
 } ms_game_state_t;
 
@@ -118,6 +169,7 @@ void   ms_game_init(ms_game_state_t *st, int stage_index, int saved_best_score, 
 void   ms_recalc_resolution(ms_game_state_t *st);
 void   ms_game_step(ms_game_state_t *st, uint32_t input_mask, float dt_sec);
 void   ms_release_stage_assets(ms_game_state_t *st);
+void   ms_spawn_effect(ms_game_state_t *st, int kind, float x, float y, float scale);
 size_t ms_export_prefs_blob(const ms_game_state_t *st, uint8_t *out_buf, size_t cap);
 bool   ms_import_prefs_blob(ms_game_state_t *st, const uint8_t *in_buf, size_t len);
 

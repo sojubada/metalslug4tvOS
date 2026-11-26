@@ -61,6 +61,46 @@ static void spawn_particles(ms_game_state_t *st, float x, float y, int count, ui
     }
 }
 
+void ms_spawn_effect(ms_game_state_t *st, int kind, float x, float y, float scale) {
+    if (!st) return;
+    if (st->switches.safe_mode_fallback && kind == MS_FX_SMOKE) return;
+    for (int i = 0; i < MS_MAX_EFFECTS; ++i) {
+        if (!st->effects[i].active) {
+            st->effects[i].active = true;
+            st->effects[i].kind   = kind;
+            st->effects[i].x      = x;
+            st->effects[i].y      = y;
+            st->effects[i].scale  = scale > 0.0f ? scale : 1.0f;
+            st->effects[i].frame  = 0;
+            st->effects[i].timer  = 0;
+            return;
+        }
+    }
+}
+
+/* 이펙트 종류별 프레임 수와 한 프레임이 머무는 틱 */
+static void effect_timing(int kind, int *frames, int *ticks) {
+    switch (kind) {
+        case MS_FX_EXPLOSION: *frames = 6; *ticks = 4; break;
+        case MS_FX_IMPACT:    *frames = 4; *ticks = 3; break;
+        case MS_FX_SMOKE:     *frames = 5; *ticks = 4; break;
+        case MS_FX_MUZZLE:    *frames = 3; *ticks = 2; break;
+        default:              *frames = 4; *ticks = 3; break;
+    }
+}
+
+static void step_effects(ms_game_state_t *st) {
+    for (int i = 0; i < MS_MAX_EFFECTS; ++i) {
+        ms_effect_t *fx = &st->effects[i];
+        if (!fx->active) continue;
+        int frames = 4, ticks = 3;
+        effect_timing(fx->kind, &frames, &ticks);
+        fx->timer++;
+        fx->frame = fx->timer / ticks;
+        if (fx->frame >= frames) fx->active = false;
+    }
+}
+
 static void spawn_bullet(ms_game_state_t *st, float x, float y, float vx, float vy, int dmg, bool from_player, bool is_grenade) {
     for (int i = 0; i < MS_MAX_BULLETS; ++i) {
         if (!st->bullets[i].active) {
@@ -106,6 +146,7 @@ static bool spawn_enemy_unit(ms_game_state_t *st, ms_enemy_kind_t kind, float x,
                     en->vx = -65.0f; en->hp = 2; en->score_value = 100; en->ai_timer = 75; break;
             }
             en->max_hp = en->hp;
+            en->facing = (en->vx > 0.0f) ? 1 : -1;
             return true;
         }
     }
@@ -163,6 +204,7 @@ void ms_release_stage_assets(ms_game_state_t *st) {
     memset(st->bullets, 0, sizeof(st->bullets));
     memset(st->enemies, 0, sizeof(st->enemies));
     memset(st->particles, 0, sizeof(st->particles));
+    memset(st->effects, 0, sizeof(st->effects));
     st->initialized = false;
     st->approx_mem_bytes = 0;
     set_diag(st, "stage assets released; footprint reduced");
@@ -188,6 +230,7 @@ void ms_game_step(ms_game_state_t *st, uint32_t input_mask, float dt_sec) {
 
     if (dt_sec <= 0.0f || dt_sec > 0.05f) dt_sec = 1.0f / 60.0f;
     st->tick_count++;
+    st->sfx_events = 0;
 
     ms_player_t *p = &st->player;
     if (p->fire_cooldown > 0) p->fire_cooldown--;
@@ -198,6 +241,7 @@ void ms_game_step(ms_game_state_t *st, uint32_t input_mask, float dt_sec) {
             p->in_slug = !p->in_slug;
             p->w = p->in_slug ? 74.0f : 44.0f;
             p->h = p->in_slug ? 68.0f : 64.0f;
+            st->sfx_events |= MS_SFX_SLUG;
             set_diag(st, p->in_slug ? "boarded metal slug" : "exited metal slug");
         }
     }
@@ -210,6 +254,7 @@ void ms_game_step(ms_game_state_t *st, uint32_t input_mask, float dt_sec) {
     if ((input_mask & MS_INPUT_JUMP) && p->on_ground) {
         p->vy = MS_JUMP_VELOCITY;
         p->on_ground = false;
+        st->sfx_events |= MS_SFX_JUMP;
     }
 
     p->vy += MS_GRAVITY * dt_sec;
@@ -231,17 +276,24 @@ void ms_game_step(ms_game_state_t *st, uint32_t input_mask, float dt_sec) {
         if (input_mask & MS_INPUT_UP) {
             spawn_bullet(st, p->x + p->w * 0.5f, p->y - p->h - 6.0f,
                          0.0f, -MS_BULLET_SPEED, dmg, true, false);
+            p->fired_up = true;
+            ms_spawn_effect(st, MS_FX_MUZZLE, p->x + p->w * 0.5f, p->y - p->h - 10.0f, 0.7f);
         } else {
             float bx = (p->facing > 0) ? (p->x + p->w + 6.0f) : (p->x - 14.0f);
             float by = p->y - p->h * 0.55f;
             spawn_bullet(st, bx, by, (float)p->facing * MS_BULLET_SPEED, 0.0f, dmg, true, false);
+            p->fired_up = false;
+            ms_spawn_effect(st, MS_FX_MUZZLE, bx, by, 0.7f);
         }
         p->fire_cooldown = p->in_slug ? 7 : 9;
+        p->muzzle_timer  = 7;
+        st->sfx_events |= MS_SFX_SHOOT;
     }
 
     if ((input_mask & MS_INPUT_GRENADE) && p->grenade_count > 0 && p->fire_cooldown == 0) {
         p->grenade_count--;
         p->fire_cooldown = 18;
+        st->sfx_events |= MS_SFX_GRENADE;
         spawn_bullet(st, p->x + p->w * 0.5f, p->y - p->h * 0.7f,
                      (float)p->facing * 360.0f, -460.0f, 6, true, true);
     }
@@ -263,7 +315,11 @@ void ms_game_step(ms_game_state_t *st, uint32_t input_mask, float dt_sec) {
         if (b->ttl_frames <= 0 ||
             b->x < st->camera_x - 200.0f || b->x > st->camera_x + MS_BASE_VIEW_WIDTH + 200.0f ||
             b->y < -120.0f || b->y > MS_BASE_VIEW_HEIGHT + 120.0f) {
-            if (b->is_grenade && b->ttl_frames <= 0) spawn_particles(st, b->x, b->y, 8, 0xFFFF9900);
+            if (b->is_grenade && b->ttl_frames <= 0) {
+                spawn_particles(st, b->x, b->y, 8, 0xFFFF9900);
+                ms_spawn_effect(st, MS_FX_EXPLOSION, b->x, b->y, 1.2f);
+                st->sfx_events |= MS_SFX_EXPLOSION;
+            }
             b->active = false;
             continue;
         }
@@ -271,19 +327,26 @@ void ms_game_step(ms_game_state_t *st, uint32_t input_mask, float dt_sec) {
         if (b->from_player) {
             for (int e = 0; e < MS_MAX_ENEMIES; ++e) {
                 ms_enemy_t *en = &st->enemies[e];
-                if (!en->active) continue;
+                if (!en->active || en->death_timer > 0) continue;
                 float ew = (en->kind == MS_ENEMY_TANK || en->kind == MS_ENEMY_HELI) ? 72.0f : 48.0f;
                 float eh = 56.0f;
                 if (aabb_overlap(b->x - 10.0f, b->y - 10.0f, 20.0f, 20.0f,
                                  en->x, en->y - eh, ew, eh)) {
                     en->hp -= b->damage;
+                    en->hit_flash = 5;
                     b->active = false;
                     spawn_particles(st, b->x, b->y, 5, 0xFFFFDD33);
-                    if (en->hp <= 0) {
-                        en->active = false;
+                    ms_spawn_effect(st, MS_FX_IMPACT, b->x, b->y, 0.6f);
+                    if (en->hp <= 0 && en->death_timer == 0) {
+                        bool big = (en->kind == MS_ENEMY_TANK || en->kind == MS_ENEMY_HELI);
+                        en->death_timer = big ? 30 : 24;
                         st->score += en->score_value;
                         if (st->score > st->best_score) st->best_score = st->score;
                         spawn_particles(st, en->x + ew * 0.5f, en->y - eh * 0.5f, 12, 0xFFFF5522);
+                        ms_spawn_effect(st, MS_FX_EXPLOSION,
+                                        en->x + ew * 0.5f, en->y - eh * 0.5f,
+                                        big ? 1.8f : 1.0f);
+                        st->sfx_events |= MS_SFX_EXPLOSION;
                     }
                     break;
                 }
@@ -294,6 +357,7 @@ void ms_game_step(ms_game_state_t *st, uint32_t input_mask, float dt_sec) {
                              p->x, p->y - p->h, p->w, p->h)) {
                 b->active = false;
                 p->invuln_frames = 45;
+                st->sfx_events |= MS_SFX_HIT;
                 if (p->in_slug) {
                     p->slug_hp -= b->damage;
                     if (p->slug_hp <= 0) {
@@ -305,6 +369,7 @@ void ms_game_step(ms_game_state_t *st, uint32_t input_mask, float dt_sec) {
                     p->hp -= b->damage;
                     if (p->hp <= 0) {
                         p->hp = 0; st->game_over = true;
+                        st->sfx_events |= MS_SFX_GAMEOVER;
                         set_diag(st, "player hp reached zero; game over");
                     }
                 }
@@ -315,6 +380,14 @@ void ms_game_step(ms_game_state_t *st, uint32_t input_mask, float dt_sec) {
     for (int i = 0; i < MS_MAX_ENEMIES; ++i) {
         ms_enemy_t *en = &st->enemies[i];
         if (!en->active) continue;
+        if (en->hit_flash > 0) en->hit_flash--;
+        if (en->death_timer > 0) {
+            en->death_timer--;
+            en->anim_timer++;
+            if (en->death_timer == 0) en->active = false;
+            continue;   /* 쓰러지는 동안에는 움직이거나 쏘지 않는다 */
+        }
+        en->anim_timer++;
         if (en->x < st->camera_x - 160.0f || en->x > st->camera_x + MS_BASE_VIEW_WIDTH + 300.0f) continue;
 
         if (en->kind == MS_ENEMY_PARATROOPER) {
@@ -326,6 +399,7 @@ void ms_game_step(ms_game_state_t *st, uint32_t input_mask, float dt_sec) {
         } else {
             en->x += en->vx * dt_sec;
         }
+        if (en->vx != 0.0f) en->facing = (en->vx > 0.0f) ? 1 : -1;
 
         en->ai_timer--;
         if (en->ai_timer <= 0) {
@@ -338,6 +412,26 @@ void ms_game_step(ms_game_state_t *st, uint32_t input_mask, float dt_sec) {
                          (dx / dist) * 320.0f, (dy / dist) * 320.0f, 1, false, false);
         }
     }
+
+    /* 플레이어 애니메이션 상태 결정 — 렌더러는 이 값만 보고 시트를 고른다 */
+    {
+        int prev = p->anim_state;
+        int next;
+        if (st->game_over)            next = MS_ANIM_DEAD;
+        else if (p->muzzle_timer > 0) next = p->fired_up ? MS_ANIM_FIRE_UP : MS_ANIM_FIRE;
+        else if (p->invuln_frames > 38) next = MS_ANIM_HIT;
+        else if (!p->on_ground)       next = (p->vy < 0.0f) ? MS_ANIM_JUMP : MS_ANIM_FALL;
+        else if (p->vx != 0.0f)       next = MS_ANIM_RUN;
+        else                          next = MS_ANIM_IDLE;
+        p->anim_state = next;
+        p->anim_timer = (next == prev) ? p->anim_timer + 1 : 0;
+        if (p->muzzle_timer > 0) p->muzzle_timer--;
+        /* 달릴 때 발밑 흙먼지 */
+        if (next == MS_ANIM_RUN && (p->anim_timer % 14) == 0)
+            ms_spawn_effect(st, MS_FX_SMOKE, p->x + p->w * 0.5f, p->y, 0.5f);
+    }
+
+    step_effects(st);
 
     for (int i = 0; i < MS_MAX_PARTICLES; ++i) {
         ms_particle_t *pt = &st->particles[i];
